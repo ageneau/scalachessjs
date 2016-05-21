@@ -2,7 +2,6 @@ package scalachessjs
 
 import scala.scalajs.js.JSApp
 import scala.scalajs.js
-import org.scalajs.dom
 import js.Dynamic.{ global => g, newInstance => jsnew, literal => jsobj }
 import js.JSConverters._
 import js.annotation._
@@ -12,162 +11,142 @@ import chess.variant.Variant
 
 object Main extends JSApp {
   def main(): Unit = {
+  }
 
-    val self = js.Dynamic.global
+  @JSExportNamed
+  def getDests(variant: js.UndefOr[String], fen: String): js.Object = {
+    val variantOpt: Option[Variant] = variant.asInstanceOf[js.UndefOr[String]].toOption.flatMap(Variant(_));
 
-    self.addEventListener("message", { e: dom.MessageEvent =>
-      val data = e.data.asInstanceOf[Message]
-      val payload = data.payload.asInstanceOf[js.Dynamic]
-      val fen = payload.fen.asInstanceOf[js.UndefOr[String]].toOption
-      val variantKey = payload.variant.asInstanceOf[js.UndefOr[String]].toOption
-      val variant = variantKey.flatMap(Variant(_))
+    val game = Game(variantOpt, Some(fen))
+    possibleDests(game).asInstanceOf[js.Object]
+  }
 
-      data.topic match {
+  @JSExportNamed
+  def move(
+    variant: js.UndefOr[String],
+    fen: js.UndefOr[String],
+    pgnMoves: js.UndefOr[js.Array[String]],
+    uciMoves: js.UndefOr[js.Array[String]],
+    orig: String,
+    dest: String,
+    promotion: js.UndefOr[String]): js.Object = {
+    val fenOpt : Option[String] = fen.toOption
+    val variantOpt = variant.toOption
+    val variant_ = variantOpt.flatMap(Variant(_))
 
-        case "init" => {
-          init(variant, fen)
-        }
-        case "dests" => {
-          val path = payload.path.asInstanceOf[js.UndefOr[String]].toOption
-          fen.fold {
-            sendError("fen field is required for dests topic")
-          } { fen =>
-            getDests(variant, fen, path)
-          }
-        }
-        case "threefoldTest" => {
-          val pgnMoves = payload.pgnMoves.asInstanceOf[js.Array[String]].toList
-          val initialFen = payload.initialFen.asInstanceOf[js.UndefOr[String]].toOption
-          Replay(pgnMoves, initialFen, variant getOrElse Variant.default) match {
-            case Success(replay) => {
-              self.postMessage(Message(
-                topic = "threefoldTest",
-                payload = jsobj(
-                  "threefoldRepetition" -> replay.state.board.history.threefoldRepetition,
-                  "status" -> jsobj(
-                    "id" -> Status.Draw.id,
-                    "name" -> Status.Draw.name
-                  )
-                )
-              ))
-            }
-            case Failure(errors) => sendError(errors.head)
-          }
-        }
-        case "move" => {
-          val promotion = payload.promotion.asInstanceOf[js.UndefOr[String]].toOption
-          val origS = payload.orig.asInstanceOf[String]
-          val destS = payload.dest.asInstanceOf[String]
-          val pgnMovesOpt = payload.pgnMoves.asInstanceOf[js.UndefOr[js.Array[String]]].toOption
-          val uciMovesOpt = payload.uciMoves.asInstanceOf[js.UndefOr[js.Array[String]]].toOption
-          val pgnMoves = pgnMovesOpt.map(_.toList).getOrElse(List.empty[String])
-          val uciMoves = uciMovesOpt.map(_.toList).getOrElse(List.empty[String])
-          val path = payload.path.asInstanceOf[js.UndefOr[String]].toOption
-          (for {
-            orig <- Pos.posAt(origS)
-            dest <- Pos.posAt(destS)
-            fen <- fen
-          } yield (orig, dest, fen)) match {
-            case Some((orig, dest, fen)) =>
-              move(variant, fen, pgnMoves, uciMoves, orig, dest, Role.promotable(promotion), path)
-            case None =>
-              sendError(s"step topic params: $origS, $destS, $fen are not valid")
-          }
-        }
-        case "pgnRead" => {
-          val pgn = payload.pgn.asInstanceOf[String]
-          (for {
-            replay <- chess.format.pgn.Reader.full(pgn)
-            fen = chess.format.Forsyth >> replay.setup
-            games <- replayGames(replay.chronoMoves, Some(fen), replay.setup.board.variant)
-          } yield (replay, games)) match {
-            case Success((replay, listOfGames)) => {
-              self.postMessage(Message(
-                topic = "pgnRead",
-                payload = jsobj(
-                  "variant" -> new VariantInfo {
-                    val key = replay.setup.board.variant.key
-                    val name = replay.setup.board.variant.name
-                    val shortName = replay.setup.board.variant.shortName
-                    val title = replay.setup.board.variant.title
-                  },
-                  "setup" -> gameToSituationInfo(replay.setup),
-                  "replay" -> listOfGames.map(gameToSituationInfo(_)).toJSArray
-                )
-              ))
-            }
-            case Failure(errors) => sendError(errors.head)
-          }
-        }
-        case "pgnDump" => {
-          val pgnMoves = payload.pgnMoves.asInstanceOf[js.Array[String]].toList
-          val initialFen = payload.initialFen.asInstanceOf[js.UndefOr[String]].toOption
-          val white = payload.white.asInstanceOf[js.UndefOr[String]].toOption
-          val black = payload.black.asInstanceOf[js.UndefOr[String]].toOption
-          val date = payload.date.asInstanceOf[js.UndefOr[String]].toOption
-          Replay(pgnMoves, initialFen, variant getOrElse Variant.default) match {
-            case Success(replay) => {
-              val pgn = PgnDump(replay.state, initialFen, replay.setup.turns, white, black, date)
-              self.postMessage(Message(
-                topic = "pgnDump",
-                payload = jsobj(
-                  "pgn" -> pgn.toString
-                )
-              ))
-            }
-            case Failure(errors) => sendError(errors.head)
-          }
-        }
-      }
-    })
+    val promotion_ : Option[PromotableRole] = Role.promotable(promotion.toOption)
+    val pgnMovesOpt = pgnMoves.toOption
+    val uciMovesOpt = uciMoves.toOption
+    val pgnMoves_ = pgnMovesOpt.map(_.toList).getOrElse(List.empty[String])
+    val uciMoves_ = uciMovesOpt.map(_.toList).getOrElse(List.empty[String])
 
-    def init(variant: Option[Variant], fen: Option[String]): Unit = {
-      val game = Game(variant, fen)
-      self.postMessage(Message(
-        topic = "init",
-        payload = jsobj(
-          "variant" -> new VariantInfo {
-            val key = game.board.variant.key
-            val name = game.board.variant.name
-            val shortName = game.board.variant.shortName
-            val title = game.board.variant.title
-          },
-          "setup" -> gameToSituationInfo(game)
-        )
-      ))
+    (for {
+      orig <- Pos.posAt(orig)
+      dest <- Pos.posAt(dest)
+      fen <- fenOpt
+    } yield (orig, dest, fen)) match {
+      case Some((orig, dest, fen)) =>
+        Game(variant_, fenOpt)(orig, dest, promotion_) match {
+          case Success((newGame, move)) => {
+            gameToSituationInfo(newGame.withPgnMoves(pgnMoves_ ++ newGame.pgnMoves), uciMoves_, promotion_)
+          }
+          case Failure(errors) => throw new Exception(errors.head)
+        }
+      case None =>
+        throw new Exception(s"step topic params: $orig, $dest, $fen are not valid")
     }
+  }
 
-    def getDests(variant: Option[Variant], fen: String, path: Option[String]): Unit = {
-      val game = Game(variant, Some(fen))
-      self.postMessage(Message(
-        topic = "dests",
-        payload = jsobj(
-          "dests" -> possibleDests(game),
-          "path" -> path.orUndefined
-        )
-      ))
-    }
+  @JSExport
+  def init(variant: String, fen: String): js.Object = {
+    val variantOpt = variant.asInstanceOf[js.UndefOr[String]].toOption.flatMap(Variant(_));
 
-    def move(variant: Option[Variant], fen: String, pgnMoves: List[String], uciMoves: List[String], orig: Pos, dest: Pos, promotion: Option[PromotableRole], path: Option[String]): Unit = {
-      Game(variant, Some(fen))(orig, dest, promotion) match {
-        case Success((newGame, move)) => {
-          self.postMessage(Message(
-            topic = "move",
-            payload = jsobj(
-              "situation" -> gameToSituationInfo(newGame.withPgnMoves(pgnMoves ++ newGame.pgnMoves), uciMoves, promotion),
-              "path" -> path.orUndefined
+    val game = Game(variantOpt, Some(fen))
+    jsobj(
+        "variant" -> new VariantInfo {
+          val key = game.board.variant.key
+          val name = game.board.variant.name
+          val shortName = game.board.variant.shortName
+          val title = game.board.variant.title
+        },
+        "setup" -> gameToSituationInfo(game)
+    )
+  }
+
+  @JSExportNamed
+  def threefoldTest(
+    variant: String,
+    pgnMoves: js.Array[String],
+    initialFen: js.UndefOr[String]
+  ) : js.Object = {
+    val pgnMoves_ = pgnMoves.asInstanceOf[js.Array[String]].toList
+    val initialFenOpt = initialFen.asInstanceOf[js.UndefOr[String]].toOption
+    val variantOpt = variant.asInstanceOf[js.UndefOr[String]].toOption.flatMap(Variant(_));
+
+    Replay(pgnMoves_, initialFenOpt, variantOpt getOrElse Variant.default) match {
+      case Success(replay) => {
+        jsobj(
+            "threefoldRepetition" -> replay.state.board.history.threefoldRepetition,
+            "status" -> jsobj(
+              "id" -> Status.Draw.id,
+              "name" -> Status.Draw.name
             )
-          ))
-        }
-        case Failure(errors) => sendError(errors.head)
+        )
       }
+      case Failure(errors) => throw new Exception(errors.head)
     }
+  }
 
-    def sendError(error: String): Unit =
-      self.postMessage(Message(
-        topic = "error",
-        payload = error
-      ))
+  @JSExportNamed
+  def pgnRead(
+    pgn: String
+  ) : js.Object = {
+    (for {
+      replay <- chess.format.pgn.Reader.full(pgn)
+      fen = chess.format.Forsyth >> replay.setup
+      games <- replayGames(replay.chronoMoves, Some(fen), replay.setup.board.variant)
+    } yield (replay, games)) match {
+      case Success((replay, listOfGames)) => {
+        jsobj(
+          "variant" -> new VariantInfo {
+            val key = replay.setup.board.variant.key
+            val name = replay.setup.board.variant.name
+            val shortName = replay.setup.board.variant.shortName
+            val title = replay.setup.board.variant.title
+          },
+          "setup" -> gameToSituationInfo(replay.setup),
+          "replay" -> listOfGames.map(gameToSituationInfo(_)).toJSArray
+        )
+      }
+      case Failure(errors) => throw new Exception(errors.head)
+    }
+  }
+
+  @JSExportNamed
+  def pgnDump(
+    variant: js.UndefOr[String],
+    pgnMoves: js.Array[String],
+    initialFen: js.UndefOr[String],
+    white: js.UndefOr[String],
+    black: js.UndefOr[String],
+    date: js.UndefOr[String]
+  ) : js.Object = {
+    val pgnMoves_ = pgnMoves.toList
+    val initialFenOpt = initialFen.toOption
+    val whiteOpt = white.toOption
+    val blackOpt = black.toOption
+    val dateOpt = date.toOption
+    val variantOpt = variant.asInstanceOf[js.UndefOr[String]].toOption.flatMap(Variant(_));
+
+    Replay(pgnMoves_, initialFenOpt, variantOpt getOrElse Variant.default) match {
+      case Success(replay) => {
+        val pgn = PgnDump(replay.state, initialFenOpt, replay.setup.turns, whiteOpt, blackOpt, dateOpt)
+        jsobj(
+          "pgn" -> pgn.toString
+        )
+      }
+      case Failure(errors) => throw new Exception(errors.head)
+    }
   }
 
   private def gameToSituationInfo(game: Game, curUciMoves: List[String] = List.empty[String], promotionRole: Option[PromotableRole] = None): js.Object = {
@@ -225,19 +204,6 @@ object Main extends JSApp {
         recursiveGames(newGame, rest) map { newGame :: _ }
       }
     }
-
-}
-
-
-@js.native
-trait Message extends js.Object {
-  val topic: String
-  val payload: js.Any
-}
-
-object Message {
-  def apply(topic: String, payload: js.Any): Message =
-    js.Dynamic.literal(topic = topic, payload = payload).asInstanceOf[Message]
 }
 
 @ScalaJSDefined
